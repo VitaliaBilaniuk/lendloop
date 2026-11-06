@@ -1,0 +1,409 @@
+{
+  "name": "LendLoop: overdue reminders",
+  "id": "LendLoopOverdue1",
+  "active": false,
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## LendLoop: overdue reminders\nRuns daily at 09:00 UTC. *Run on demand* lets you trigger it from the CLI (`n8n execute --id=LendLoopOverdue1`) or another workflow.\n\n1. Fetches overdue loans from Convex (signed GET). Convex leaves out loans already reminded today.\n2. Sends one reminder per borrower (mock channel).\n3. Writes the result back to Convex with key `overdue:<loanId>:<date>`, so re-runs and retries are idempotent.\n\nIf any reminder fails, the run is marked failed and the error workflow reports it.",
+        "width": 520,
+        "height": 280
+      },
+      "id": "0f02eb75-4c22-5477-8330-173953cfac5f",
+      "name": "About",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -40,
+        -320
+      ]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "days",
+              "triggerAtHour": 9
+            }
+          ]
+        }
+      },
+      "id": "e991b9b8-4051-549b-9185-582c229c22cf",
+      "name": "Every day at 09:00",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "inputSource": "passthrough"
+      },
+      "id": "67b65112-81e3-5111-be31-bbed220e98a3",
+      "name": "Run on demand",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        0,
+        280
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Signs the GET request for today's overdue loans (empty body).\nconst crypto = require('crypto');\nconst secret = $env.LENDLOOP_CALLBACK_SECRET;\nif (!secret || secret.length < 32) throw new Error('LENDLOOP_CALLBACK_SECRET is not configured');\n\nconst path = '/n8n/overdue-loans';\nconst ts = String(Math.floor(Date.now() / 1000));\nconst signature = 'v1=' + crypto.createHmac('sha256', secret).update(`${ts}.GET.${path}.`).digest('hex');\nreturn [{ json: { path, ts, signature } }];\n"
+      },
+      "id": "f5e483e4-2fcc-5c30-8ce3-25529f925419",
+      "name": "Sign request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.CONVEX_SITE_URL }}{{ $json.path }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-LendLoop-Timestamp",
+              "value": "={{ $json.ts }}"
+            },
+            {
+              "name": "X-LendLoop-Signature",
+              "value": "={{ $json.signature }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 10000,
+          "redirect": {
+            "redirect": {
+              "followRedirects": false
+            }
+          }
+        }
+      },
+      "id": "b13f2071-b872-561b-89a0-0feff579dbd3",
+      "name": "Fetch overdue loans",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        440,
+        100
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "fieldToSplitOut": "loans",
+        "options": {}
+      },
+      "id": "59161dd2-bd89-5ed0-a18c-7828196a1905",
+      "name": "One item per loan",
+      "type": "n8n-nodes-base.splitOut",
+      "typeVersion": 1,
+      "position": [
+        660,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Builds an overdue reminder for one loan returned by Convex.\nconst days = $json.daysOverdue;\nreturn {\n  json: {\n    kind: 'overdue_reminder',\n    idempotencyKey: $json.reminderKey,\n    loanId: $json.loanId,\n    to: $json.borrower.email,\n    subject: `Reminder: please return the ${$json.toolName}`,\n    text: `Hi ${$json.borrower.firstName},\\n\\nThe ${$json.toolName} you borrowed was due back on ${$json.endDate} (${days} day${days === 1 ? '' : 's'} ago). Please return it or message the lender to arrange a new time.\\n\\n- LendLoop`,\n  },\n};\n",
+        "mode": "runOnceForEachItem"
+      },
+      "id": "733c9647-9fc1-5f1d-aef6-a5acab6127df",
+      "name": "Compose reminder",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// MOCK notification channel: logs the message instead of sending it.\n// To send real email, replace this node with a \"Send Email\" node that uses\n// an SMTP credential (to: {{ $json.to }}, subject/text from this item).\n// The address is masked so logs do not collect personal data.\nconst masked = String($json.to).replace(/^(.).*(@.*)$/, '$1***$2');\nconsole.log(`[LendLoop] ${$json.kind} -> ${masked}: \"${$json.subject}\"`);\nreturn { json: { ...$json, status: 'sent', channel: 'mock-log' } };\n",
+        "mode": "runOnceForEachItem"
+      },
+      "id": "2b3fac12-6fe5-5542-86ab-7836074fe097",
+      "name": "Send reminder (mock)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1100,
+        100
+      ],
+      "onError": "continueErrorOutput",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "jsCode": "// Reached via the error output of the send node (after its retries).\n// The original message comes from the paired item of \"Compose reminder\", so the\n// failure is recorded against the right loan even if the error item is bare.\nconst original = $('Compose reminder').item.json;\nconst error = $json.error;\nconst message = typeof error === 'string' ? error : (error && error.message) || 'Send failed';\nreturn {\n  json: {\n    kind: original.kind,\n    idempotencyKey: original.idempotencyKey,\n    loanId: original.loanId,\n    status: 'failed',\n    channel: 'mock-log',\n    detail: String(message).replace(/[^\\s@]+@[^\\s@]+/g, '[email]').slice(0, 300),\n  },\n};\n",
+        "mode": "runOnceForEachItem"
+      },
+      "id": "a2eddcce-ad48-5dd0-a1e7-7f0ab708c430",
+      "name": "Mark failed",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1320,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Signs the write-back to Convex:\n//   X-LendLoop-Signature: v1=HMAC_SHA256(secret, `${ts}.POST.${path}.${body}`)\n// The body is sent as raw text so the signed bytes are exactly what arrives.\nconst crypto = require('crypto');\nconst secret = $env.LENDLOOP_CALLBACK_SECRET;\nif (!secret || secret.length < 32) throw new Error('LENDLOOP_CALLBACK_SECRET is not configured');\n\nconst path = '/n8n/automation-events';\nconst body = JSON.stringify({\n  idempotencyKey: $json.idempotencyKey, // same key on every retry => no duplicates\n  loanId: $json.loanId,\n  kind: $json.kind,\n  status: $json.status,\n  channel: $json.channel,\n  detail: $json.detail,\n});\nconst ts = String(Math.floor(Date.now() / 1000));\nconst signature = 'v1=' + crypto.createHmac('sha256', secret).update(`${ts}.POST.${path}.${body}`).digest('hex');\nreturn { json: { status: $json.status, path, body, ts, signature } };\n",
+        "mode": "runOnceForEachItem"
+      },
+      "id": "c65ce8c1-854b-5cb9-99e5-0f2f1e2c3142",
+      "name": "Sign write-back",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1540,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.CONVEX_SITE_URL }}{{ $json.path }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-LendLoop-Timestamp",
+              "value": "={{ $json.ts }}"
+            },
+            {
+              "name": "X-LendLoop-Signature",
+              "value": "={{ $json.signature }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 10000,
+          "redirect": {
+            "redirect": {
+              "followRedirects": false
+            }
+          }
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ $json.body }}"
+      },
+      "id": "798b584c-5169-5e07-967b-f88fd49872d3",
+      "name": "Write reminder status to Convex",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1760,
+        100
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "13d38807-3ce3-55e3-8d06-678b780f29f0",
+              "leftValue": "={{ $('Sign write-back').item.json.status === 'failed' }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "3d8bd63f-7424-53ba-ad56-c09fb296a5bf",
+      "name": "Any reminder failed?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1980,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "errorMessage": "One or more overdue reminders failed (recorded in Convex)"
+      },
+      "id": "b5e28140-6889-540c-8d6f-488285f06e12",
+      "name": "Fail execution",
+      "type": "n8n-nodes-base.stopAndError",
+      "typeVersion": 1,
+      "position": [
+        2200,
+        80
+      ]
+    }
+  ],
+  "connections": {
+    "Every day at 09:00": {
+      "main": [
+        [
+          {
+            "node": "Sign request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run on demand": {
+      "main": [
+        [
+          {
+            "node": "Sign request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sign request": {
+      "main": [
+        [
+          {
+            "node": "Fetch overdue loans",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch overdue loans": {
+      "main": [
+        [
+          {
+            "node": "One item per loan",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "One item per loan": {
+      "main": [
+        [
+          {
+            "node": "Compose reminder",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Compose reminder": {
+      "main": [
+        [
+          {
+            "node": "Send reminder (mock)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send reminder (mock)": {
+      "main": [
+        [
+          {
+            "node": "Sign write-back",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Mark failed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mark failed": {
+      "main": [
+        [
+          {
+            "node": "Sign write-back",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sign write-back": {
+      "main": [
+        [
+          {
+            "node": "Write reminder status to Convex",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Write reminder status to Convex": {
+      "main": [
+        [
+          {
+            "node": "Any reminder failed?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Any reminder failed?": {
+      "main": [
+        [
+          {
+            "node": "Fail execution",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataSuccessExecution": "none",
+    "saveDataErrorExecution": "all",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner",
+    "errorWorkflow": "LendLoopErrorWf1"
+  },
+  "pinData": {},
+  "tags": []
+}

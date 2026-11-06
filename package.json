@@ -1,0 +1,47 @@
+{
+  "name": "lendloop",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "dev:convex": "convex dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint",
+    "typecheck": "next typegen && tsc --noEmit",
+    "test": "vitest run",
+    "n8n:up": "docker compose up -d",
+    "n8n:import": "docker compose exec n8n n8n import:workflow --separate --input=/workflows && docker compose exec n8n sh -c 'for id in LendLoopErrorWf1 LendLoopEventsWf LendLoopOverdue1; do n8n publish:workflow --id=$id; done' && docker compose restart n8n",
+    "n8n:local": "bash n8n/run-local.sh start",
+    "n8n:local:import": "bash n8n/run-local.sh import:workflow --separate --input=n8n/workflows && for id in LendLoopErrorWf1 LendLoopEventsWf LendLoopOverdue1; do bash n8n/run-local.sh publish:workflow --id=$id; done"
+  },
+  "dependencies": {
+    "@clerk/nextjs": "^7.9.24",
+    "convex": "^1.48.0",
+    "next": "16.4.5",
+    "react": "19.3.0",
+    "react-dom": "19.3.0"
+  },
+  "devDependencies": {
+    "@edge-runtime/vm": "^5.0.0",
+    "@tailwindcss/turbopack": "^4",
+    "@types/node": "^20",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "convex-test": "^0.0.67",
+    "eslint": "^9",
+    "eslint-config-next": "16.4.5",
+    "prettier": "^3.9.10",
+    "tailwindcss": "^4",
+    "typescript": "^5",
+    "vitest": "^4.1.12"
+  },
+  "engines": {
+    "node": ">=20.9"
+  },
+  "overrides": {
+    "@typescript-eslint/typescript-estree": {
+      "minimatch": "^11.0.1"
+    }
+  }
+}

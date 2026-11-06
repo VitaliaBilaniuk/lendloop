@@ -1,0 +1,121 @@
+{
+  "name": "LendLoop: error handler",
+  "id": "LendLoopErrorWf1",
+  "active": false,
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## LendLoop: error handler\nSet as the *Error Workflow* of the other LendLoop workflows. It reports each failed execution to Convex (signed, idempotent per execution id), where it appears under **Admin > Automation**, and also logs it to stdout.\n\nOnly metadata is forwarded. Email addresses in error messages are redacted.",
+        "width": 480,
+        "height": 240
+      },
+      "id": "96ae10dc-d4f0-56bc-964e-cb54a69f4488",
+      "name": "About",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -40,
+        -280
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "55a4ccd2-d9c8-5223-9f5f-36dc9891b20c",
+      "name": "On workflow error",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Reports a failed execution to Convex so it is visible in the admin panel.\n// Only metadata is sent: no item data, which may contain personal details.\nconst crypto = require('crypto');\nconst secret = $env.LENDLOOP_CALLBACK_SECRET;\nif (!secret || secret.length < 32) throw new Error('LENDLOOP_CALLBACK_SECRET is not configured');\n\nconst { execution = {}, workflow = {}, trigger } = $json;\nconst error = execution.error || (trigger && trigger.error) || {};\nconst message = String(error.message || 'Unknown error')\n  .replace(/[^\\s@]+@[^\\s@]+/g, '[email]') // never forward addresses\n  .slice(0, 500);\n\nconst path = '/n8n/workflow-failures';\nconst body = JSON.stringify({\n  executionId: String(execution.id || `trigger-${Date.now()}`),\n  workflowName: String(workflow.name || 'unknown'),\n  lastNode: execution.lastNodeExecuted || (error.node && error.node.name) || undefined,\n  message,\n});\nconst ts = String(Math.floor(Date.now() / 1000));\nconst signature = 'v1=' + crypto.createHmac('sha256', secret).update(`${ts}.POST.${path}.${body}`).digest('hex');\nconsole.error(`[LendLoop] workflow \"${workflow.name}\" failed at ${execution.lastNodeExecuted}: ${message}`);\nreturn [{ json: { path, body, ts, signature } }];\n"
+      },
+      "id": "7b26dccf-b318-5aff-a7b8-ca74267cc740",
+      "name": "Summarise and sign",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.CONVEX_SITE_URL }}{{ $json.path }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-LendLoop-Timestamp",
+              "value": "={{ $json.ts }}"
+            },
+            {
+              "name": "X-LendLoop-Signature",
+              "value": "={{ $json.signature }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 10000,
+          "redirect": {
+            "redirect": {
+              "followRedirects": false
+            }
+          }
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ $json.body }}"
+      },
+      "id": "04b5b4e6-edd5-5be6-8ed3-c4d3e2c45556",
+      "name": "Report failure to Convex",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        440,
+        100
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    }
+  ],
+  "connections": {
+    "On workflow error": {
+      "main": [
+        [
+          {
+            "node": "Summarise and sign",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Summarise and sign": {
+      "main": [
+        [
+          {
+            "node": "Report failure to Convex",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataSuccessExecution": "none",
+    "saveDataErrorExecution": "all",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "pinData": {},
+  "tags": []
+}
