@@ -50,3 +50,7 @@ n8n/.env
 # n8n without Docker (n8n/run-local.sh)
 n8n/.data/
 n8n/.runtime/
+
+# task spec (kept locally, not published)
+Agents.MD
+AGENTS.md
